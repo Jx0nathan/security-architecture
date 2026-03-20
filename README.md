@@ -1,100 +1,204 @@
-# DCS Card Centre — 安全架构
-**符合 MAS TRM 2021 | PDPA | PCI DSS v4.0**
+# DCS Card Centre — Security Architecture
 
-> ⚠️ 机密文件 — 仅限内部使用，禁止对外传播。
+**Compliant with MAS TRM 2021 · PDPA · PCI DSS v4.0**
+
+> ⚠️ Confidential — Internal use only. Do not distribute externally.
 
 ---
 
-## 仓库结构
+## Architecture Diagrams
+
+### Overall Security Architecture
+
+![Overall Architecture](architecture/overall-architecture.png)
+
+### Security Tooling — Traffic Flow & Layer Controls
+
+![Security Tools](architecture/security-tools.png)
+
+**Traffic flow (top → bottom):**
+
+```
+🌐 Internet  (Browser · Mobile App · Partner API · Attacker)
+        │  HTTPS / TLS 1.3
+        ▼
+🛡 Cloudflare Edge
+   Cloudflare WAF (Managed Ruleset)  ·  DDoS Shield Advanced
+   DNS / DNSSEC  ·  TLS 1.3 Termination  ·  Bot Management
+        │  Origin Pull · TLS
+        ▼
+🔥 AWS Perimeter
+   ALB  ·  AWS WAF (OWASP CRS)  ·  AWS Shield Advanced
+   ACM Certificate  ·  Rate Limiting  ·  Geo Blocking
+        │  HTTP/2 · VPC Internal
+        ▼
+🚦 Kubernetes Ingress  (Traefik)
+   Namespace Routing  ·  Istio mTLS  ·  JWT Validation
+        │  Namespace Route · mTLS
+        ▼
+⚙️ Application Services  (K8s + Istio Sidecar)
+   Istio mTLS  ·  OAuth2 + JWT  ·  SonarCloud SAST
+   Snyk SCA  ·  42Crunch API Audit  ·  OWASP ZAP DAST
+        │  DB / Cache · TLS
+        ▼
+🗄 Data Layer
+   RDS PostgreSQL (AES-256-GCM)  ·  Redis (TLS)  ·  S3 (SSE-KMS)
+   AWS KMS  ·  HCP Vault  ·  AWS Macie  ·  SealSuite DLP
+```
+
+All layers emit logs → **Elastic Cloud SIEM** → PagerDuty / Tines SOAR → SOC
+
+---
+
+## Repository Structure
 
 ```
 architecture/
-  overall-architecture.excalidraw   ← 整体安全架构图（用 excalidraw.com 打开）
+  overall-architecture.png          ← Full security architecture diagram
+  security-tools.png                ← Security tooling by layer (traffic flow)
 
-安全技术实施指南/
-  01-边界安全.md                     ← WAF、DDoS、TLS 配置规范
-  02-内网安全.md                     ← VPC 结构、mTLS、路由、命名空间隔离
-  03-数据安全.md                     ← 字段加密、PAN Tokenization、DLP
-  04-身份与访问管理.md                ← MFA、PAM、Vault、访问审查
-  05-安全运营.md                     ← SIEM 告警规则、SOC 流程、IR SOP、VAPT
+security-implementation-guide/
+  01-边界安全.md                     ← Perimeter Security       (MAS TRM §9)
+  02-内网安全.md                     ← Network Security          (MAS TRM §9)
+  03-数据安全.md                     ← Data Security             (MAS TRM §13 · PDPA · PCI DSS)
+  04-身份与访问管理.md                ← Identity & Access Mgmt   (MAS TRM §10)
+  05-安全运营.md                     ← Security Operations       (MAS TRM §12 · §14)
 
-mas-mapping/
-  trm-control-mapping.md            ← MAS TRM §6-§14 逐条控制映射与缺口分析
+mas-trm/
+  MAS TRM Guidelines.pdf            ← MAS TRM 2021 official source document
 ```
 
 ---
 
-## 整体架构分层（纵深防御）
+## Security Tooling — SaaS & Managed Only
 
-```
-互联网
-    ↓
-【边界安全】     Cloudflare WAF + DDoS + Bot 过滤
-    ↓
-【AWS 入口】     CloudFront + AWS WAF（OWASP CRS）+ ALB
-    ↓
-【API 网关】     Kong / AWS API GW — 认证 + 限速 + 路由
-    ↓
-【应用层】       K8s + Traefik + Istio mTLS + Vault
-    ↓
-【数据层】       RDS（AES-256）+ Redis（TLS）+ S3（SSE-KMS）+ 区块链（HSM）
-    ↓
-【安全运营】     SIEM + EDR/SealSuite + CSPM + WAF 分析
-    ↓
-【身份与合规】   IAM + PAM + GRC + CISO
-```
+All tools selected are SaaS or fully managed — no self-hosted infrastructure required.
 
----
+**Perimeter & Edge**
+- Cloudflare WAF — Managed Ruleset (SaaS)
+- Cloudflare DDoS Shield Advanced — L3/L4/L7
+- AWS WAF — OWASP Core Rule Set (managed)
+- AWS Shield Advanced — DDoS managed service
+- AWS ACM — TLS certificate auto-renew (managed)
 
-## MAS TRM 核心合规要求
+**Network & Ingress**
+- Traefik — Namespace-level routing
+- Istio Service Mesh — mTLS all pod-to-pod traffic (managed)
+- JWT Validation — enforced per ingress endpoint
 
-**§6 治理与监督**
-→ CISO 独立向 CEO/董事会汇报
-→ IT 风险管理框架正式建立并年度审查
+**Application Security**
+- SonarCloud — SAST static analysis (SaaS)
+- Snyk SCA — dependency + image vulnerability scan (SaaS)
+- OWASP ZAP — DAST pre-release scan
+- 42Crunch — OpenAPI spec security audit (SaaS)
 
-**§8 系统安全**
-→ 系统加固标准（CIS Benchmark）
-→ VAPT 每年一次（Critical 漏洞 14 天内修复）
-→ SDL 嵌入研发流程
+**Data Security**
+- AWS KMS — master key management (managed)
+- HCP Vault — dynamic secrets + PAM (SaaS)
+- HCP Vault Transit — card number tokenization (SaaS)
+- AWS Macie — PII auto-classification (managed)
+- SealSuite DLP — endpoint data control (SaaS)
 
-**§9 网络安全**
-→ WAF 边界防护 + OWASP CRS
-→ 网络分区（公有 / 私有 / 数据 / 管理子网）
-→ 内部接口禁止暴露公网
-→ 所有网络配置变更走 CAB 审批
+**Identity & Access Management**
+- Okta SSO + MFA — Identity Provider, TOTP/Push (SaaS)
+- HCP Vault — Just-in-Time access, secret rotation (SaaS)
+- AWS IAM — role-based access, no hardcoded credentials
+- AWS CloudTrail — full API audit log (managed)
 
-**§10 身份与访问管理**
-→ MFA 强制（所有生产系统）
-→ 最小权限原则
-→ PAM 工具（HashiCorp Vault）
-→ 季度访问权限审查
+**Security Operations**
+- Elastic Cloud SIEM — log aggregation, correlation, Kibana (managed)
+- SealSuite EDR — endpoint detection + response (SaaS)
+- AWS Security Hub — CSPM, GuardDuty, Inspector (managed)
+- Recorded Future — threat intelligence feed (SaaS)
+- PagerDuty — P1/P2 on-call alert + phone escalation (SaaS)
+- Tines SOAR — automated response playbooks (SaaS)
+- Tenable.io — VAPT scanning, annual + post-change (SaaS)
 
-**§11 业务连续性**
-→ 关键系统 RTO ≤ 4 小时，RPO ≤ 4 小时
-→ 可用性 ≥ 99.95%
-→ 每年一次完整 DR 演练
+**CI/CD Security Pipeline**
+- SonarCloud → Snyk → OWASP ZAP → 42Crunch → Release Gate
 
-**§12 安全监控**
-→ SIEM 7×24 告警
-→ 异常行为实时检测
-→ P1 告警 15 分钟内响应
-
-**§13 数据安全**
-→ AES-256 静态加密（含字段级加密）
-→ TLS 1.2+ 传输加密
-→ PAN Tokenization（PCI DSS 要求）
-→ CVV 永不存储
-
-**§14 事件管理**
-→ 重大事件 1 小时内致电 MAS
-→ 24 小时内提交书面报告
-→ 关闭后 30 天内提交完整 RCA
+**Compliance & GRC**
+- Vanta — ISO 27001 / SOC 2 compliance automation (SaaS)
+- Cobalt.io — PTaaS penetration testing (SaaS)
+- Trustwave — PCI DSS QSA (managed service)
+- Jira Cloud — unified issue and risk tracking (SaaS)
 
 ---
 
-## 版本历史
+## MAS TRM 2021 — Key Compliance Requirements
 
-| 日期 | 版本 | 说明 |
-|------|------|------|
-| 2026-03-15 | v0.2 | 全部文档翻译为中文，目录重命名为安全技术实施指南 |
-| 2026-03-15 | v0.1 | 初始架构草案（英文版） |
+**§6 Governance & Oversight**
+- CISO reports independently to CEO / Board
+- IT risk management framework formally established, annual review
+
+**§8 System Security**
+- CIS Benchmark hardening applied to all systems
+- VAPT annually + after every major change
+- SDL (Secure Development Lifecycle) embedded in engineering
+
+**§9 Network Security**
+- WAF with OWASP CRS at perimeter
+- Network segmentation: Public / Private / Data / Management subnets
+- Internal API namespaces must not be exposed to public internet
+- All network config changes require CAB approval
+
+**§10 Identity & Access Management**
+- MFA mandatory for all production system access
+- Principle of least privilege enforced
+- PAM via HCP Vault (Just-in-Time access)
+- Quarterly access review for all privileged accounts
+
+**§11 Business Continuity**
+- Critical system availability: ≥ 99.95% (≤ 4.4 hrs downtime/year)
+- RTO ≤ 4 hours · RPO ≤ 4 hours
+- Full DR drill annually
+
+**§12 Security Monitoring**
+- SIEM 24×7 alert coverage
+- Real-time anomaly detection on all API traffic
+- P1 alert response: ≤ 15 minutes
+
+**§14 Incident Management**
+- Initial notification to MAS: within 1 hour (phone)
+- Written report to MAS: within 24 hours
+- Full RCA submission: within 30 days post-closure
+
+---
+
+## Implementation Status
+
+| Module | Status | Target |
+|--------|--------|--------|
+| WAF (Cloudflare + AWS OWASP CRS) | 🔄 In Progress | Q1 2026 |
+| Elastic Cloud SIEM | 🔄 In Progress | Q1 2026 |
+| HCP Vault (secrets management) | 📋 Planned | Q2 2026 |
+| Okta SSO + MFA | 🔄 In Progress | Q1 2026 |
+| SonarCloud + Snyk (CI/CD) | 📋 Planned | Q2 2026 |
+| AWS Macie (PII scanning) | 📋 Planned | Q2 2026 |
+| Vanta (ISO 27001 automation) | 📋 Planned | Q3 2026 |
+| Tines SOAR | 📋 Planned | Q3 2026 |
+| ISO 27001 Certification | 📋 Planned | Q4 2026 |
+
+---
+
+## Incident Reference
+
+**Feb 2026 — API Exposure Incident (Resolved)**
+
+Root cause: WAF IP allowlist removed Dec 3, 2025 → `/internal/` API namespace exposed to public internet.
+
+- First unauthorized access: Feb 19, 2026 10:07 SGT
+- Last unauthorized access: Feb 20, 2026 05:52 SGT
+- Detection gap: 12+ hours (no real-time API anomaly alerting)
+- Scale: 69,945 requests · 23,079 PII records + 12,000+ financial records exposed
+- Assessment: opportunistic, not targeted
+
+Remediations driven by this incident:
+- WAF OWASP CRS re-enabled and hardened
+- Elastic SIEM deployment fast-tracked
+- `/internal/` namespace routing blocked at Traefik ingress
+- MAS TRM §9 and §12 gap remediation in progress
+
+---
+
+*Last updated: March 2026 | Owner: Head of Technology*
